@@ -380,7 +380,7 @@ rrGetMultiScreenResources(ClientPtr client, Bool query, ScreenPtr pScreen)
     CARD8 *names;
     int has_primary = 0;
 
-    /* we need to iterate all the GPU primarys and all their output secondarys */
+    /* we need to iterate all the GPU masters and all their output slaves */
     total_crtcs = 0;
     total_outputs = 0;
     total_modes = 0;
@@ -394,8 +394,8 @@ rrGetMultiScreenResources(ClientPtr client, Bool query, ScreenPtr pScreen)
 
     update_totals(pScreen, pScrPriv);
 
-    xorg_list_for_each_entry(iter, &pScreen->secondary_list, secondary_head) {
-        if (!iter->is_output_secondary)
+    xorg_list_for_each_entry(iter, &pScreen->slave_list, slave_head) {
+        if (!iter->is_output_slave)
             continue;
 
         pScrPriv = rrGetScrPriv(iter);
@@ -453,8 +453,8 @@ rrGetMultiScreenResources(ClientPtr client, Bool query, ScreenPtr pScreen)
     }
     update_arrays(pScreen, pScrPriv, primary_crtc, has_primary);
 
-    xorg_list_for_each_entry(iter, &pScreen->secondary_list, secondary_head) {
-        if (!iter->is_output_secondary)
+    xorg_list_for_each_entry(iter, &pScreen->slave_list, slave_head) {
+        if (!iter->is_output_slave)
             continue;
 
         pScrPriv = rrGetScrPriv(iter);
@@ -509,7 +509,7 @@ rrGetScreenResources(ClientPtr client, Bool query)
         if (!RRGetInfo(pScreen, query))
             return BadAlloc;
 
-    if (pScreen->output_secondarys)
+    if (pScreen->output_slaves)
         return rrGetMultiScreenResources(client, query, pScreen);
 
     if (!pScrPriv) {

@@ -1156,9 +1156,9 @@ static Bool
 drmmode_SharedPixmapPresent(PixmapPtr ppix, xf86CrtcPtr crtc,
                             drmmode_ptr drmmode)
 {
-    ScreenPtr primary = crtc->randr_crtc->pScreen->current_primary;
+    ScreenPtr master = crtc->randr_crtc->pScreen->current_master;
 
-    if (primary->PresentSharedPixmap(ppix)) {
+    if (master->PresentSharedPixmap(ppix)) {
         /* Success, queue flip to back target */
         if (drmmode_SharedPixmapFlip(ppix, crtc, drmmode))
             return TRUE;
@@ -1170,13 +1170,13 @@ drmmode_SharedPixmapPresent(PixmapPtr ppix, xf86CrtcPtr crtc,
     }
 
     /* Failed to present, try again on next vblank after damage */
-    if (primary->RequestSharedPixmapNotifyDamage) {
+    if (master->RequestSharedPixmapNotifyDamage) {
         msPixmapPrivPtr ppriv = msGetPixmapPriv(drmmode, ppix);
 
         /* Set flag first in case we are immediately notified */
         ppriv->wait_for_damage = TRUE;
 
-        if (primary->RequestSharedPixmapNotifyDamage(ppix))
+        if (master->RequestSharedPixmapNotifyDamage(ppix))
             return TRUE;
         else
             ppriv->wait_for_damage = FALSE;
@@ -1850,9 +1850,9 @@ drmmode_set_target_scanout_pixmap_cpu(xf86CrtcPtr crtc, PixmapPtr ppix,
         ppriv = msGetPixmapPriv(drmmode, *target);
         drmModeRmFB(drmmode->fd, ppriv->fb_id);
         ppriv->fb_id = 0;
-        if (ppriv->secondary_damage) {
-            DamageUnregister(ppriv->secondary_damage);
-            ppriv->secondary_damage = NULL;
+        if (ppriv->slave_damage) {
+            DamageUnregister(ppriv->slave_damage);
+            ppriv->slave_damage = NULL;
         }
         *target = NULL;
     }
@@ -1861,16 +1861,16 @@ drmmode_set_target_scanout_pixmap_cpu(xf86CrtcPtr crtc, PixmapPtr ppix,
         return TRUE;
 
     ppriv = msGetPixmapPriv(drmmode, ppix);
-    if (!ppriv->secondary_damage) {
-        ppriv->secondary_damage = DamageCreate(NULL, NULL,
+    if (!ppriv->slave_damage) {
+        ppriv->slave_damage = DamageCreate(NULL, NULL,
                                            DamageReportNone,
                                            TRUE,
                                            crtc->randr_crtc->pScreen,
                                            NULL);
     }
-    ptr = drmmode_map_secondary_bo(drmmode, ppriv);
+    ptr = drmmode_map_slave_bo(drmmode, ppriv);
     ppix->devPrivate.ptr = ptr;
-    DamageRegister(&ppix->drawable, ppriv->secondary_damage);
+    DamageRegister(&ppix->drawable, ppriv->slave_damage);
 
     if (ppriv->fb_id == 0) {
         drmModeAddFB(drmmode->fd, ppix->drawable.width,
@@ -4193,7 +4193,7 @@ drmmode_map_front_bo(drmmode_ptr drmmode)
 }
 
 void *
-drmmode_map_secondary_bo(drmmode_ptr drmmode, msPixmapPrivPtr ppriv)
+drmmode_map_slave_bo(drmmode_ptr drmmode, msPixmapPrivPtr ppriv)
 {
     int ret;
 

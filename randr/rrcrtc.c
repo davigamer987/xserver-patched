@@ -373,17 +373,17 @@ RRComputeContiguity(ScreenPtr pScreen)
 
 static void
 rrDestroySharedPixmap(RRCrtcPtr crtc, PixmapPtr pPixmap) {
-    ScreenPtr primary = crtc->pScreen->current_primary;
+    ScreenPtr master = crtc->pScreen->current_master;
 
-    if (primary && pPixmap->primary_pixmap) {
+    if (master && pPixmap->master_pixmap) {
         /*
          * Unref the pixmap twice: once for the original reference, and once
-         * for the reference implicitly added by PixmapShareToSecondary.
+         * for the reference implicitly added by PixmapShareToSlave.
          */
-        PixmapUnshareSecondaryPixmap(pPixmap);
+        PixmapUnshareSlavePixmap(pPixmap);
 
-        primary->DestroyPixmap(pPixmap->primary_pixmap);
-        primary->DestroyPixmap(pPixmap->primary_pixmap);
+        master->DestroyPixmap(pPixmap->master_pixmap);
+        master->DestroyPixmap(pPixmap->master_pixmap);
     }
 
     crtc->pScreen->DestroyPixmap(pPixmap);
@@ -395,14 +395,14 @@ RRCrtcDetachScanoutPixmap(RRCrtcPtr crtc)
     rrScrPriv(crtc->pScreen);
 
     if (crtc->scanout_pixmap) {
-        ScreenPtr primary = crtc->pScreen->current_primary;
-        DrawablePtr mrootdraw = &primary->root->drawable;
+        ScreenPtr master = crtc->pScreen->current_master;
+        DrawablePtr mrootdraw = &master->root->drawable;
 
         if (crtc->scanout_pixmap_back) {
             pScrPriv->rrDisableSharedPixmapFlipping(crtc);
 
             if (mrootdraw) {
-                primary->StopFlippingPixmapTracking(mrootdraw,
+                master->StopFlippingPixmapTracking(mrootdraw,
                                                    crtc->scanout_pixmap,
                                                    crtc->scanout_pixmap_back);
             }
@@ -414,7 +414,7 @@ RRCrtcDetachScanoutPixmap(RRCrtcPtr crtc)
             pScrPriv->rrCrtcSetScanoutPixmap(crtc, NULL);
 
             if (mrootdraw) {
-                primary->StopPixmapTracking(mrootdraw,
+                master->StopPixmapTracking(mrootdraw,
                                            crtc->scanout_pixmap);
             }
         }
@@ -427,20 +427,20 @@ RRCrtcDetachScanoutPixmap(RRCrtcPtr crtc)
 }
 
 static PixmapPtr
-rrCreateSharedPixmap(RRCrtcPtr crtc, ScreenPtr primary,
+rrCreateSharedPixmap(RRCrtcPtr crtc, ScreenPtr master,
                      int width, int height, int depth,
                      int x, int y, Rotation rotation)
 {
     PixmapPtr mpix, spix;
 
-    mpix = primary->CreatePixmap(primary, width, height, depth,
+    mpix = master->CreatePixmap(master, width, height, depth,
                                 CREATE_PIXMAP_USAGE_SHARED);
     if (!mpix)
         return NULL;
 
-    spix = PixmapShareToSecondary(mpix, crtc->pScreen);
+    spix = PixmapShareToSlave(mpix, crtc->pScreen);
     if (spix == NULL) {
-        primary->DestroyPixmap(mpix);
+        master->DestroyPixmap(mpix);
         return NULL;
     }
 
@@ -494,30 +494,30 @@ rrSetupPixmapSharing(RRCrtcPtr crtc, int width, int height,
                      int x, int y, Rotation rotation, Bool sync,
                      int numOutputs, RROutputPtr * outputs)
 {
-    ScreenPtr primary = crtc->pScreen->current_primary;
-    rrScrPrivPtr pPrimaryScrPriv = rrGetScrPriv(primary);
-    rrScrPrivPtr pSecondaryScrPriv = rrGetScrPriv(crtc->pScreen);
-    DrawablePtr mrootdraw = &primary->root->drawable;
+    ScreenPtr master = crtc->pScreen->current_master;
+    rrScrPrivPtr pMasterScrPriv = rrGetScrPriv(master);
+    rrScrPrivPtr pSlaveScrPriv = rrGetScrPriv(crtc->pScreen);
+    DrawablePtr mrootdraw = &master->root->drawable;
     int depth = mrootdraw->depth;
     PixmapPtr spix_front;
 
-    /* Create a pixmap on the primary screen, then get a shared handle for it.
-       Create a shared pixmap on the secondary screen using the handle.
+    /* Create a pixmap on the master screen, then get a shared handle for it.
+       Create a shared pixmap on the slave screen using the handle.
 
        If sync == FALSE --
-       Set secondary screen to scanout shared linear pixmap.
-       Set the primary screen to do dirty updates to the shared pixmap
+       Set slave screen to scanout shared linear pixmap.
+       Set the master screen to do dirty updates to the shared pixmap
        from the screen pixmap on its own accord.
 
        If sync == TRUE --
        If any of the below steps fail, clean up and fall back to sync == FALSE.
-       Create another shared pixmap on the secondary screen using the handle.
-       Set secondary screen to prepare for scanout and flipping between shared
+       Create another shared pixmap on the slave screen using the handle.
+       Set slave screen to prepare for scanout and flipping between shared
        linear pixmaps.
-       Set the primary screen to do dirty updates to the shared pixmaps from the
-       screen pixmap when prompted to by us or the secondary.
-       Prompt the primary to do a dirty update on the first shared pixmap, then
-       defer to the secondary.
+       Set the master screen to do dirty updates to the shared pixmaps from the
+       screen pixmap when prompted to by us or the slave.
+       Prompt the master to do a dirty update on the first shared pixmap, then
+       defer to the slave.
     */
 
     if (crtc->scanout_pixmap)
@@ -527,7 +527,7 @@ rrSetupPixmapSharing(RRCrtcPtr crtc, int width, int height,
         return TRUE;
     }
 
-    spix_front = rrCreateSharedPixmap(crtc, primary,
+    spix_front = rrCreateSharedPixmap(crtc, master,
                                       width, height, depth,
                                       x, y, rotation);
     if (spix_front == NULL) {
@@ -537,36 +537,36 @@ rrSetupPixmapSharing(RRCrtcPtr crtc, int width, int height,
 
     /* Both source and sink must support required ABI funcs for flipping */
     if (sync &&
-        pSecondaryScrPriv->rrEnableSharedPixmapFlipping &&
-        pSecondaryScrPriv->rrDisableSharedPixmapFlipping &&
-        pPrimaryScrPriv->rrStartFlippingPixmapTracking &&
-        primary->PresentSharedPixmap &&
-        primary->StopFlippingPixmapTracking) {
+        pSlaveScrPriv->rrEnableSharedPixmapFlipping &&
+        pSlaveScrPriv->rrDisableSharedPixmapFlipping &&
+        pMasterScrPriv->rrStartFlippingPixmapTracking &&
+        master->PresentSharedPixmap &&
+        master->StopFlippingPixmapTracking) {
 
-        PixmapPtr spix_back = rrCreateSharedPixmap(crtc, primary,
+        PixmapPtr spix_back = rrCreateSharedPixmap(crtc, master,
                                                    width, height, depth,
                                                    x, y, rotation);
         if (spix_back == NULL)
             goto fail;
 
-        if (!pSecondaryScrPriv->rrEnableSharedPixmapFlipping(crtc,
+        if (!pSlaveScrPriv->rrEnableSharedPixmapFlipping(crtc,
                                                          spix_front, spix_back))
             goto fail;
 
         crtc->scanout_pixmap = spix_front;
         crtc->scanout_pixmap_back = spix_back;
 
-        if (!pPrimaryScrPriv->rrStartFlippingPixmapTracking(crtc,
+        if (!pMasterScrPriv->rrStartFlippingPixmapTracking(crtc,
                                                            mrootdraw,
                                                            spix_front,
                                                            spix_back,
                                                            x, y, 0, 0,
                                                            rotation)) {
-            pSecondaryScrPriv->rrDisableSharedPixmapFlipping(crtc);
+            pSlaveScrPriv->rrDisableSharedPixmapFlipping(crtc);
             goto fail;
         }
 
-        primary->PresentSharedPixmap(spix_front);
+        master->PresentSharedPixmap(spix_front);
 
         return TRUE;
 
@@ -585,14 +585,14 @@ fail: /* If flipping funcs fail, just fall back to unsynchronized */
         rrSetPixmapSharingSyncProp(0, numOutputs, outputs);
     }
 
-    if (!pSecondaryScrPriv->rrCrtcSetScanoutPixmap(crtc, spix_front)) {
+    if (!pSlaveScrPriv->rrCrtcSetScanoutPixmap(crtc, spix_front)) {
         rrDestroySharedPixmap(crtc, spix_front);
-        ErrorF("randr: failed to set shadow secondary pixmap\n");
+        ErrorF("randr: failed to set shadow slave pixmap\n");
         return FALSE;
     }
     crtc->scanout_pixmap = spix_front;
 
-    primary->StartPixmapTracking(mrootdraw, spix_front, x, y, 0, 0, rotation);
+    master->StartPixmapTracking(mrootdraw, spix_front, x, y, 0, 0, rotation);
 
     return TRUE;
 }
@@ -625,7 +625,7 @@ rrCheckPixmapBounding(ScreenPtr pScreen,
     int c;
     BoxRec newbox;
     BoxPtr newsize;
-    ScreenPtr secondary;
+    ScreenPtr slave;
     int new_width, new_height;
     PixmapPtr screen_pixmap = pScreen->GetScreenPixmap(pScreen);
     rrScrPriv(pScreen);
@@ -633,8 +633,8 @@ rrCheckPixmapBounding(ScreenPtr pScreen,
     PixmapRegionInit(&root_pixmap_region, screen_pixmap);
     RegionInit(&total_region, NULL, 0);
 
-    /* have to iterate all the crtcs of the attached gpu primarys
-       and all their output secondarys */
+    /* have to iterate all the crtcs of the attached gpu masters
+       and all their output slaves */
     for (c = 0; c < pScrPriv->numCrtcs; c++) {
         RRCrtcPtr crtc = pScrPriv->crtcs[c];
 
@@ -658,16 +658,16 @@ rrCheckPixmapBounding(ScreenPtr pScreen,
         RegionUnion(&total_region, &total_region, &new_crtc_region);
     }
 
-    xorg_list_for_each_entry(secondary, &pScreen->secondary_list, secondary_head) {
-        rrScrPrivPtr    secondary_priv = rrGetScrPriv(secondary);
+    xorg_list_for_each_entry(slave, &pScreen->slave_list, slave_head) {
+        rrScrPrivPtr    slave_priv = rrGetScrPriv(slave);
 
-        if (!secondary->is_output_secondary)
+        if (!slave->is_output_slave)
             continue;
 
-        for (c = 0; c < secondary_priv->numCrtcs; c++) {
-            RRCrtcPtr secondary_crtc = secondary_priv->crtcs[c];
+        for (c = 0; c < slave_priv->numCrtcs; c++) {
+            RRCrtcPtr slave_crtc = slave_priv->crtcs[c];
 
-            if (secondary_crtc == rr_crtc) {
+            if (slave_crtc == rr_crtc) {
                 newbox.x1 = x;
                 newbox.y1 = y;
                 if (rotation == RR_Rotate_90 ||
@@ -680,9 +680,9 @@ rrCheckPixmapBounding(ScreenPtr pScreen,
                 }
             }
             else {
-                if (!secondary_crtc->mode)
+                if (!slave_crtc->mode)
                     continue;
-                crtc_to_box(&newbox, secondary_crtc);
+                crtc_to_box(&newbox, slave_crtc);
             }
             RegionInit(&new_crtc_region, &newbox, 1);
             RegionUnion(&total_region, &total_region, &new_crtc_region);
@@ -769,19 +769,19 @@ RRCrtcSet(RRCrtcPtr crtc,
     }
     else {
         if (pScreen->isGPU) {
-            ScreenPtr primary = pScreen->current_primary;
+            ScreenPtr master = pScreen->current_master;
             int width = 0, height = 0;
 
             if (mode) {
                 width = mode->mode.width;
                 height = mode->mode.height;
             }
-            ret = rrCheckPixmapBounding(primary, crtc,
+            ret = rrCheckPixmapBounding(master, crtc,
                                         rotation, x, y, width, height);
             if (!ret)
                 return FALSE;
 
-            if (pScreen->current_primary) {
+            if (pScreen->current_master) {
                 Bool sync = rrGetPixmapSharingSyncProp(numOutputs, outputs);
                 ret = rrSetupPixmapSharing(crtc, width, height,
                                            x, y, rotation, sync,
@@ -1438,8 +1438,8 @@ ProcRRSetCrtcConfig(ClientPtr client)
             int width, height;
 
             if (pScreen->isGPU) {
-                width = pScreen->current_primary->width;
-                height = pScreen->current_primary->height;
+                width = pScreen->current_master->width;
+                height = pScreen->current_master->height;
             }
             else {
                 width = pScreen->width;
@@ -1941,7 +1941,7 @@ RRConstrainCursorHarder(DeviceIntPtr pDev, ScreenPtr pScreen, int mode, int *x,
 {
     rrScrPriv(pScreen);
     Bool ret;
-    ScreenPtr secondary;
+    ScreenPtr slave;
 
     /* intentional dead space -> let it float */
     if (pScrPriv->discontiguous)
@@ -1952,11 +1952,11 @@ RRConstrainCursorHarder(DeviceIntPtr pDev, ScreenPtr pScreen, int mode, int *x,
     if (ret == TRUE)
         return;
 
-    xorg_list_for_each_entry(secondary, &pScreen->secondary_list, secondary_head) {
-        if (!secondary->is_output_secondary)
+    xorg_list_for_each_entry(slave, &pScreen->slave_list, slave_head) {
+        if (!slave->is_output_slave)
             continue;
 
-        ret = check_all_screen_crtcs(secondary, x, y);
+        ret = check_all_screen_crtcs(slave, x, y);
         if (ret == TRUE)
             return;
     }
@@ -1966,11 +1966,11 @@ RRConstrainCursorHarder(DeviceIntPtr pDev, ScreenPtr pScreen, int mode, int *x,
     if (ret == TRUE)
         return;
 
-    xorg_list_for_each_entry(secondary, &pScreen->secondary_list, secondary_head) {
-        if (!secondary->is_output_secondary)
+    xorg_list_for_each_entry(slave, &pScreen->slave_list, slave_head) {
+        if (!slave->is_output_slave)
             continue;
 
-        ret = constrain_all_screen_crtcs(pDev, secondary, x, y);
+        ret = constrain_all_screen_crtcs(pDev, slave, x, y);
         if (ret == TRUE)
             return;
     }
@@ -2069,13 +2069,7 @@ RRHasScanoutPixmap(ScreenPtr pScreen)
     rrScrPrivPtr pScrPriv;
     int i;
 
-    /* Bail out if RandR wasn't initialized. */
-    if (!dixPrivateKeyRegistered(rrPrivKey))
-        return FALSE;
-
-    pScrPriv = rrGetScrPriv(pScreen);
-
-    if (!pScreen->is_output_secondary)
+    if (!pScreen->is_output_slave)
         return FALSE;
 
     for (i = 0; i < pScrPriv->numCrtcs; i++) {

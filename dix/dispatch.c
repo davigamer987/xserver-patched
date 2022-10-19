@@ -3920,7 +3920,7 @@ static int init_screen(ScreenPtr pScreen, int i, Bool gpu)
     pScreen->CreateScreenResources = 0;
 
     xorg_list_init(&pScreen->pixmap_dirty_list);
-    xorg_list_init(&pScreen->secondary_list);
+    xorg_list_init(&pScreen->slave_list);
 
     /*
      * This loop gets run once for every Screen that gets added,
@@ -4088,54 +4088,54 @@ void
 AttachUnboundGPU(ScreenPtr pScreen, ScreenPtr new)
 {
     assert(new->isGPU);
-    assert(!new->current_primary);
-    xorg_list_add(&new->secondary_head, &pScreen->secondary_list);
-    new->current_primary = pScreen;
+    assert(!new->current_master);
+    xorg_list_add(&new->slave_head, &pScreen->slave_list);
+    new->current_master = pScreen;
 }
 
 void
-DetachUnboundGPU(ScreenPtr secondary)
+DetachUnboundGPU(ScreenPtr slave)
 {
-    assert(secondary->isGPU);
-    assert(!secondary->is_output_secondary);
-    assert(!secondary->is_offload_secondary);
-    xorg_list_del(&secondary->secondary_head);
-    secondary->current_primary = NULL;
+    assert(slave->isGPU);
+    assert(!slave->is_output_slave);
+    assert(!slave->is_offload_slave);
+    xorg_list_del(&slave->slave_head);
+    slave->current_master = NULL;
 }
 
 void
 AttachOutputGPU(ScreenPtr pScreen, ScreenPtr new)
 {
     assert(new->isGPU);
-    assert(!new->is_output_secondary);
-    assert(new->current_primary == pScreen);
-    new->is_output_secondary = TRUE;
-    new->current_primary->output_secondarys++;
+    assert(!new->is_output_slave);
+    assert(new->current_master == pScreen);
+    new->is_output_slave = TRUE;
+    new->current_master->output_slaves++;
 }
 
 void
-DetachOutputGPU(ScreenPtr secondary)
+DetachOutputGPU(ScreenPtr slave)
 {
-    assert(secondary->isGPU);
-    assert(secondary->is_output_secondary);
-    secondary->current_primary->output_secondarys--;
-    secondary->is_output_secondary = FALSE;
+    assert(slave->isGPU);
+    assert(slave->is_output_slave);
+    slave->current_master->output_slaves--;
+    slave->is_output_slave = FALSE;
 }
 
 void
 AttachOffloadGPU(ScreenPtr pScreen, ScreenPtr new)
 {
     assert(new->isGPU);
-    assert(!new->is_offload_secondary);
-    assert(new->current_primary == pScreen);
-    new->is_offload_secondary = TRUE;
+    assert(!new->is_offload_slave);
+    assert(new->current_master == pScreen);
+    new->is_offload_slave = TRUE;
 }
 
 void
-DetachOffloadGPU(ScreenPtr secondary)
+DetachOffloadGPU(ScreenPtr slave)
 {
-    assert(secondary->isGPU);
-    assert(secondary->is_offload_secondary);
-    secondary->is_offload_secondary = FALSE;
+    assert(slave->isGPU);
+    assert(slave->is_offload_slave);
+    slave->is_offload_slave = FALSE;
 }
 

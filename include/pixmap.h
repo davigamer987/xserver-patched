@@ -113,10 +113,10 @@ extern _X_EXPORT PixmapPtr AllocatePixmap(ScreenPtr /*pScreen */ ,
 extern _X_EXPORT void FreePixmap(PixmapPtr /*pPixmap */ );
 
 extern _X_EXPORT PixmapPtr
-PixmapShareToSecondary(PixmapPtr pixmap, ScreenPtr secondary);
+PixmapShareToSlave(PixmapPtr pixmap, ScreenPtr slave);
 
 extern _X_EXPORT void
-PixmapUnshareSecondaryPixmap(PixmapPtr secondary_pixmap);
+PixmapUnshareSlavePixmap(PixmapPtr slave_pixmap);
 
 #define HAS_DIRTYTRACKING_ROTATION 1
 #define HAS_DIRTYTRACKING_DRAWABLE_SRC 1

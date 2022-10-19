@@ -111,11 +111,110 @@ xf86_crtc_on(xf86CrtcPtr crtc)
     return crtc->enabled && drmmode_crtc->dpms_mode == DPMSModeOn;
 }
 
+/*
+ * Return the first output which is connected to an active CRTC on this screen.
+ *
+ * RRFirstOutput() will return an output from a slave screen if it is primary,
+ * which is not the behavior that ms_covering_crtc() wants.
+ */
+
+static RROutputPtr ms_first_output(ScreenPtr pScreen)
+{
+    rrScrPriv(pScreen);
+    RROutputPtr output;
+    int i, j;
+
+    if (!pScrPriv)
+        return NULL;
+
+    if (pScrPriv->primaryOutput && pScrPriv->primaryOutput->crtc &&
+        (pScrPriv->primaryOutput->pScreen == pScreen)) {
+        return pScrPriv->primaryOutput;
+    }
+
+    for (i = 0; i < pScrPriv->numCrtcs; i++) {
+        RRCrtcPtr crtc = pScrPriv->crtcs[i];
+
+        for (j = 0; j < pScrPriv->numOutputs; j++) {
+            output = pScrPriv->outputs[j];
+            if (output->crtc == crtc)
+                return output;
+        }
+    }
+    return NULL;
+}
 
 /*
  * Return the crtc covering 'box'. If two crtcs cover a portion of
  * 'box', then prefer the crtc with greater coverage.
  */
+
+static xf86CrtcPtr
+ms_covering_xf86_crtc(ScreenPtr pScreen, BoxPtr box, Bool screen_is_ms)
+{
+    ScrnInfoPtr scrn = xf86ScreenToScrn(pScreen);
+    xf86CrtcConfigPtr xf86_config = XF86_CRTC_CONFIG_PTR(scrn);
+    xf86CrtcPtr crtc, best_crtc;
+    int coverage, best_coverage;
+    int c;
+    BoxRec crtc_box, cover_box;
+    Bool crtc_on;
+
+    best_crtc = NULL;
+    best_coverage = 0;
+
+    if (!xf86_config)
+        return NULL;
+
+    for (c = 0; c < xf86_config->num_crtc; c++) {
+        crtc = xf86_config->crtc[c];
+
+        if (screen_is_ms)
+            crtc_on = ms_crtc_on(crtc);
+        else
+            crtc_on = crtc->enabled;
+
+        /* If the CRTC is off, treat it as not covering */
+        if (!crtc_on)
+            continue;
+
+        ms_crtc_box(crtc, &crtc_box);
+        ms_box_intersect(&cover_box, &crtc_box, box);
+        coverage = ms_box_area(&cover_box);
+        if (coverage > best_coverage) {
+            best_crtc = crtc;
+            best_coverage = coverage;
+        }
+    }
+
+    /* Fallback to primary crtc for drawable's on slave outputs */
+    if (best_crtc == NULL && !pScreen->isGPU) {
+        RROutputPtr primary_output = NULL;
+        ScreenPtr slave;
+
+        if (dixPrivateKeyRegistered(rrPrivKey))
+            primary_output = ms_first_output(scrn->pScreen);
+        if (!primary_output || !primary_output->crtc)
+            return NULL;
+
+        crtc = primary_output->crtc->devPrivate;
+        if (!ms_crtc_on(crtc))
+            return NULL;
+
+        xorg_list_for_each_entry(slave, &pScreen->slave_list, slave_head) {
+            if (!slave->is_output_slave)
+                continue;
+
+            if (ms_covering_xf86_crtc(slave, box, FALSE)) {
+                /* The drawable is on a slave output, return primary crtc */
+                return crtc;
+            }
+        }
+    }
+
+    return best_crtc;
+}
+
 static RRCrtcPtr
 rr_crtc_covering_box(ScreenPtr pScreen, BoxPtr box, Bool screen_is_xf86_hint)
 {
@@ -156,6 +255,31 @@ rr_crtc_covering_box(ScreenPtr pScreen, BoxPtr box, Bool screen_is_xf86_hint)
             (coverage == best_coverage && crtc == primary_crtc)) {
             best_crtc = crtc;
             best_coverage = coverage;
+        }
+    }
+
+    /* Fallback to primary crtc for drawable's on slave outputs */
+    if (best_crtc == NULL && !pScreen->isGPU) {
+        RROutputPtr primary_output = NULL;
+        ScreenPtr slave;
+
+        if (dixPrivateKeyRegistered(rrPrivKey))
+            primary_output = ms_first_output(scrn->pScreen);
+        if (!primary_output || !primary_output->crtc)
+            return NULL;
+
+        crtc = primary_output->crtc;
+        if (!ms_crtc_on((xf86CrtcPtr) crtc->devPrivate))
+            return NULL;
+
+        xorg_list_for_each_entry(slave, &pScreen->slave_list, slave_head) {
+            if (!slave->is_output_slave)
+                continue;
+
+            if (ms_covering_randr_crtc(slave, box, FALSE)) {
+                /* The drawable is on a slave output, return primary crtc */
+                return crtc;
+            }
         }
     }
 

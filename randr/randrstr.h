@@ -1062,7 +1062,7 @@ extern _X_EXPORT void
 RRDeliverProviderEvent(ClientPtr client, WindowPtr pWin, RRProviderPtr provider);
 
 extern _X_EXPORT void
-RRProviderAutoConfigGpuScreen(ScreenPtr pScreen, ScreenPtr primaryScreen);
+RRProviderAutoConfigGpuScreen(ScreenPtr pScreen, ScreenPtr masterScreen);
 
 /* rrproviderproperty.c */
 

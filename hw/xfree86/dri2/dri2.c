@@ -98,7 +98,7 @@ typedef struct _DRI2Drawable {
     unsigned blocked[3];
     Bool needInvalidate;
     int prime_id;
-    PixmapPtr prime_secondary_pixmap;
+    PixmapPtr prime_slave_pixmap;
     PixmapPtr redirectpixmap;
 } DRI2DrawableRec, *DRI2DrawablePtr;
 
@@ -181,33 +181,33 @@ DRI2GetScreen(ScreenPtr pScreen)
 }
 
 static ScreenPtr
-GetScreenPrime(ScreenPtr primary, int prime_id)
+GetScreenPrime(ScreenPtr master, int prime_id)
 {
-    ScreenPtr secondary;
+    ScreenPtr slave;
     if (prime_id == 0) {
-        return primary;
+        return master;
     }
-    xorg_list_for_each_entry(secondary, &primary->secondary_list, secondary_head) {
+    xorg_list_for_each_entry(slave, &master->slave_list, slave_head) {
         DRI2ScreenPtr ds;
 
-        if (!secondary->is_offload_secondary)
+        if (!slave->is_offload_slave)
             continue;
 
-        ds = DRI2GetScreen(secondary);
+        ds = DRI2GetScreen(slave);
         if (ds == NULL)
             continue;
 
         if (ds->prime_id == prime_id)
-            return secondary;
+            return slave;
     }
-    return primary;
+    return master;
 }
 
 static DRI2ScreenPtr
-DRI2GetScreenPrime(ScreenPtr primary, int prime_id)
+DRI2GetScreenPrime(ScreenPtr master, int prime_id)
 {
-    ScreenPtr secondary = GetScreenPrime(primary, prime_id);
-    return DRI2GetScreen(secondary);
+    ScreenPtr slave = GetScreenPrime(master, prime_id);
+    return DRI2GetScreen(slave);
 }
 
 static DRI2DrawablePtr
@@ -262,7 +262,7 @@ DRI2AllocateDrawable(DrawablePtr pDraw)
     xorg_list_init(&pPriv->reference_list);
     pPriv->needInvalidate = FALSE;
     pPriv->redirectpixmap = NULL;
-    pPriv->prime_secondary_pixmap = NULL;
+    pPriv->prime_slave_pixmap = NULL;
     if (pDraw->type == DRAWABLE_WINDOW) {
         pWin = (WindowPtr) pDraw;
         dixSetPrivate(&pWin->devPrivates, dri2WindowPrivateKey, pPriv);
@@ -427,9 +427,9 @@ DRI2DrawableGone(void *p, XID id)
         dixSetPrivate(&pPixmap->devPrivates, dri2PixmapPrivateKey, NULL);
     }
 
-    if (pPriv->prime_secondary_pixmap) {
-        (*pPriv->prime_secondary_pixmap->primary_pixmap->drawable.pScreen->DestroyPixmap)(pPriv->prime_secondary_pixmap->primary_pixmap);
-        (*pPriv->prime_secondary_pixmap->drawable.pScreen->DestroyPixmap)(pPriv->prime_secondary_pixmap);
+    if (pPriv->prime_slave_pixmap) {
+        (*pPriv->prime_slave_pixmap->master_pixmap->drawable.pScreen->DestroyPixmap)(pPriv->prime_slave_pixmap->master_pixmap);
+        (*pPriv->prime_slave_pixmap->drawable.pScreen->DestroyPixmap)(pPriv->prime_slave_pixmap);
     }
 
     if (pPriv->buffers != NULL) {
@@ -815,10 +815,10 @@ DrawablePtr DRI2UpdatePrime(DrawablePtr pDraw, DRI2BufferPtr pDest)
     DRI2DrawablePtr pPriv = DRI2GetDrawable(pDraw);
     PixmapPtr spix;
     PixmapPtr mpix = GetDrawablePixmap(pDraw);
-    ScreenPtr primary, secondary;
+    ScreenPtr master, slave;
     Bool ret;
 
-    primary = mpix->drawable.pScreen;
+    master = mpix->drawable.pScreen;
 
     if (pDraw->type == DRAWABLE_WINDOW) {
         WindowPtr pWin = (WindowPtr)pDraw;
@@ -831,15 +831,15 @@ DrawablePtr DRI2UpdatePrime(DrawablePtr pDraw, DRI2BufferPtr pDest)
                 pPriv->redirectpixmap->drawable.depth == pDraw->depth) {
                 mpix = pPriv->redirectpixmap;
             } else {
-                if (primary->ReplaceScanoutPixmap) {
-                    mpix = (*primary->CreatePixmap)(primary, pDraw->width, pDraw->height,
+                if (master->ReplaceScanoutPixmap) {
+                    mpix = (*master->CreatePixmap)(master, pDraw->width, pDraw->height,
                                                    pDraw->depth, CREATE_PIXMAP_USAGE_SHARED);
                     if (!mpix)
                         return NULL;
 
-                    ret = (*primary->ReplaceScanoutPixmap)(pDraw, mpix, TRUE);
+                    ret = (*master->ReplaceScanoutPixmap)(pDraw, mpix, TRUE);
                     if (ret == FALSE) {
-                        (*primary->DestroyPixmap)(mpix);
+                        (*master->DestroyPixmap)(mpix);
                         return NULL;
                     }
                     pPriv->redirectpixmap = mpix;
@@ -847,31 +847,31 @@ DrawablePtr DRI2UpdatePrime(DrawablePtr pDraw, DRI2BufferPtr pDest)
                     return NULL;
             }
         } else if (pPriv->redirectpixmap) {
-            (*primary->ReplaceScanoutPixmap)(pDraw, pPriv->redirectpixmap, FALSE);
-            (*primary->DestroyPixmap)(pPriv->redirectpixmap);
+            (*master->ReplaceScanoutPixmap)(pDraw, pPriv->redirectpixmap, FALSE);
+            (*master->DestroyPixmap)(pPriv->redirectpixmap);
             pPriv->redirectpixmap = NULL;
         }
     }
 
-    secondary = GetScreenPrime(pDraw->pScreen, pPriv->prime_id);
+    slave = GetScreenPrime(pDraw->pScreen, pPriv->prime_id);
 
     /* check if the pixmap is still fine */
-    if (pPriv->prime_secondary_pixmap) {
-        if (pPriv->prime_secondary_pixmap->primary_pixmap == mpix)
-            return &pPriv->prime_secondary_pixmap->drawable;
+    if (pPriv->prime_slave_pixmap) {
+        if (pPriv->prime_slave_pixmap->master_pixmap == mpix)
+            return &pPriv->prime_slave_pixmap->drawable;
         else {
-            PixmapUnshareSecondaryPixmap(pPriv->prime_secondary_pixmap);
-            (*pPriv->prime_secondary_pixmap->primary_pixmap->drawable.pScreen->DestroyPixmap)(pPriv->prime_secondary_pixmap->primary_pixmap);
-            (*secondary->DestroyPixmap)(pPriv->prime_secondary_pixmap);
-            pPriv->prime_secondary_pixmap = NULL;
+            PixmapUnshareSlavePixmap(pPriv->prime_slave_pixmap);
+            (*pPriv->prime_slave_pixmap->master_pixmap->drawable.pScreen->DestroyPixmap)(pPriv->prime_slave_pixmap->master_pixmap);
+            (*slave->DestroyPixmap)(pPriv->prime_slave_pixmap);
+            pPriv->prime_slave_pixmap = NULL;
         }
     }
 
-    spix = PixmapShareToSecondary(mpix, secondary);
+    spix = PixmapShareToSlave(mpix, slave);
     if (!spix)
         return NULL;
 
-    pPriv->prime_secondary_pixmap = spix;
+    pPriv->prime_slave_pixmap = spix;
 #ifdef COMPOSITE
     spix->screen_x = mpix->screen_x;
     spix->screen_y = mpix->screen_y;

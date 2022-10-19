@@ -484,7 +484,7 @@ TellChanged(WindowPtr pWin, void *value)
     ClientPtr client;
     ScreenPtr pScreen = pWin->drawable.pScreen;
     ScreenPtr iter;
-    rrScrPrivPtr pSecondaryScrPriv;
+    rrScrPrivPtr pSlaveScrPriv;
 
     rrScrPriv(pScreen);
     int i;
@@ -510,13 +510,13 @@ TellChanged(WindowPtr pWin, void *value)
                     RRDeliverCrtcEvent(client, pWin, crtc);
             }
 
-            xorg_list_for_each_entry(iter, &pScreen->secondary_list, secondary_head) {
-                if (!iter->is_output_secondary)
+            xorg_list_for_each_entry(iter, &pScreen->slave_list, slave_head) {
+                if (!iter->is_output_slave)
                     continue;
 
-                pSecondaryScrPriv = rrGetScrPriv(iter);
-                for (i = 0; i < pSecondaryScrPriv->numCrtcs; i++) {
-                    RRCrtcPtr crtc = pSecondaryScrPriv->crtcs[i];
+                pSlaveScrPriv = rrGetScrPriv(iter);
+                for (i = 0; i < pSlaveScrPriv->numCrtcs; i++) {
+                    RRCrtcPtr crtc = pSlaveScrPriv->crtcs[i];
 
                     if (crtc->changed)
                         RRDeliverCrtcEvent(client, pWin, crtc);
@@ -532,13 +532,13 @@ TellChanged(WindowPtr pWin, void *value)
                     RRDeliverOutputEvent(client, pWin, output);
             }
 
-            xorg_list_for_each_entry(iter, &pScreen->secondary_list, secondary_head) {
-                if (!iter->is_output_secondary)
+            xorg_list_for_each_entry(iter, &pScreen->slave_list, slave_head) {
+                if (!iter->is_output_slave)
                     continue;
 
-                pSecondaryScrPriv = rrGetScrPriv(iter);
-                for (i = 0; i < pSecondaryScrPriv->numOutputs; i++) {
-                    RROutputPtr output = pSecondaryScrPriv->outputs[i];
+                pSlaveScrPriv = rrGetScrPriv(iter);
+                for (i = 0; i < pSlaveScrPriv->numOutputs; i++) {
+                    RROutputPtr output = pSlaveScrPriv->outputs[i];
 
                     if (output->changed)
                         RRDeliverOutputEvent(client, pWin, output);
@@ -547,10 +547,10 @@ TellChanged(WindowPtr pWin, void *value)
         }
 
         if (pRREvent->mask & RRProviderChangeNotifyMask) {
-            xorg_list_for_each_entry(iter, &pScreen->secondary_list, secondary_head) {
-                pSecondaryScrPriv = rrGetScrPriv(iter);
-                if (pSecondaryScrPriv->provider->changed)
-                    RRDeliverProviderEvent(client, pWin, pSecondaryScrPriv->provider);
+            xorg_list_for_each_entry(iter, &pScreen->slave_list, slave_head) {
+                pSlaveScrPriv = rrGetScrPriv(iter);
+                if (pSlaveScrPriv->provider->changed)
+                    RRDeliverProviderEvent(client, pWin, pSlaveScrPriv->provider);
             }
         }
 
@@ -572,23 +572,23 @@ TellChanged(WindowPtr pWin, void *value)
 void
 RRSetChanged(ScreenPtr pScreen)
 {
-    /* set changed bits on the primary screen only */
-    ScreenPtr primary;
+    /* set changed bits on the master screen only */
+    ScreenPtr master;
     rrScrPriv(pScreen);
-    rrScrPrivPtr primarysp;
+    rrScrPrivPtr mastersp;
 
     if (pScreen->isGPU) {
-        primary = pScreen->current_primary;
-        if (!primary)
+        master = pScreen->current_master;
+        if (!master)
             return;
-        primarysp = rrGetScrPriv(primary);
+        mastersp = rrGetScrPriv(master);
     }
     else {
-        primary = pScreen;
-        primarysp = pScrPriv;
+        master = pScreen;
+        mastersp = pScrPriv;
     }
 
-    primarysp->changed = TRUE;
+    mastersp->changed = TRUE;
 }
 
 /*
@@ -597,73 +597,69 @@ RRSetChanged(ScreenPtr pScreen)
 void
 RRTellChanged(ScreenPtr pScreen)
 {
-    ScreenPtr primary;
+    ScreenPtr master;
     rrScrPriv(pScreen);
-    rrScrPrivPtr primarysp;
+    rrScrPrivPtr mastersp;
     int i;
     ScreenPtr iter;
-    rrScrPrivPtr pSecondaryScrPriv;
+    rrScrPrivPtr pSlaveScrPriv;
 
     if (pScreen->isGPU) {
-        primary = pScreen->current_primary;
-        if (!primary)
+        master = pScreen->current_master;
+        if (!master)
             return;
-        primarysp = rrGetScrPriv(primary);
+        mastersp = rrGetScrPriv(master);
     }
     else {
-        primary = pScreen;
-        primarysp = pScrPriv;
+        master = pScreen;
+        mastersp = pScrPriv;
     }
 
-    /* If there's no root window yet, can't send events */
-    if (!primary->root)
-        return;
+    xorg_list_for_each_entry(iter, &master->slave_list, slave_head) {
+        pSlaveScrPriv = rrGetScrPriv(iter);
 
-    xorg_list_for_each_entry(iter, &primary->secondary_list, secondary_head) {
-        pSecondaryScrPriv = rrGetScrPriv(iter);
-
-        if (!iter->is_output_secondary)
+        if (!iter->is_output_slave)
             continue;
 
-        if (CompareTimeStamps(primarysp->lastSetTime,
-                              pSecondaryScrPriv->lastSetTime) == EARLIER) {
-            primarysp->lastSetTime = pSecondaryScrPriv->lastSetTime;
+        if (CompareTimeStamps(mastersp->lastSetTime,
+                              pSlaveScrPriv->lastSetTime) == EARLIER) {
+            mastersp->lastSetTime = pSlaveScrPriv->lastSetTime;
         }
     }
 
-    if (primarysp->changed) {
+    if (mastersp->changed) {
         UpdateCurrentTimeIf();
-        if (primarysp->configChanged) {
-            primarysp->lastConfigTime = currentTime;
-            primarysp->configChanged = FALSE;
+        if (mastersp->configChanged) {
+            mastersp->lastConfigTime = currentTime;
+            mastersp->configChanged = FALSE;
         }
         pScrPriv->changed = FALSE;
-        primarysp->changed = FALSE;
+        mastersp->changed = FALSE;
 
-        WalkTree(primary, TellChanged, (void *) primary);
+        WalkTree(master, TellChanged, (void *) master);
 
-        primarysp->resourcesChanged = FALSE;
+        mastersp->resourcesChanged = FALSE;
 
         for (i = 0; i < pScrPriv->numOutputs; i++)
             pScrPriv->outputs[i]->changed = FALSE;
         for (i = 0; i < pScrPriv->numCrtcs; i++)
             pScrPriv->crtcs[i]->changed = FALSE;
 
-        xorg_list_for_each_entry(iter, &primary->secondary_list, secondary_head) {
-            pSecondaryScrPriv = rrGetScrPriv(iter);
-            pSecondaryScrPriv->provider->changed = FALSE;
-            if (iter->is_output_secondary) {
-                for (i = 0; i < pSecondaryScrPriv->numOutputs; i++)
-                    pSecondaryScrPriv->outputs[i]->changed = FALSE;
-                for (i = 0; i < pSecondaryScrPriv->numCrtcs; i++)
-                    pSecondaryScrPriv->crtcs[i]->changed = FALSE;
+        xorg_list_for_each_entry(iter, &master->slave_list, slave_head) {
+            pSlaveScrPriv = rrGetScrPriv(iter);
+            pSlaveScrPriv->provider->changed = FALSE;
+            if (iter->is_output_slave) {
+                for (i = 0; i < pSlaveScrPriv->numOutputs; i++)
+                    pSlaveScrPriv->outputs[i]->changed = FALSE;
+                for (i = 0; i < pSlaveScrPriv->numCrtcs; i++)
+                    pSlaveScrPriv->crtcs[i]->changed = FALSE;
             }
         }
 
-        if (primarysp->layoutChanged) {
+        if (mastersp->layoutChanged) {
             pScrPriv->layoutChanged = FALSE;
-            RRPointerScreenConfigured(primary);
-            RRSendConfigNotify(primary);
+            RRPointerScreenConfigured(master);
+            RRSendConfigNotify(master);
         }
     }
 }
